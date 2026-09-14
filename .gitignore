@@ -1,0 +1,20 @@
+# Python standard ignores
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+.env
+.env.local
+
+# Node.js standard ignores
+node_modules/
+dist/
+.DS_Store
+
+# IDE and local database
+.idea/
+.vscode/
+*.db
+*.log
