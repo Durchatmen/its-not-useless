@@ -1,0 +1,58 @@
+/**
+ * 断点与混入。
+ * 本文件通过 vite.config.js 的 additionalData 自动注入到每个 SFC 的 <style lang="less">，
+ * 因此这里只能放 Less 变量与混入，不能放会产生输出的规则（否则每个组件都会重复编译一份）。
+ */
+
+@screen-sm: 576px;
+@screen-md: 768px;
+@screen-lg: 992px;
+@screen-xl: 1200px;
+
+/** 响应式：PC 为主，兼容平板/移动端（《接口文档》适用终端约定） */
+.mq-sm(@rules) {
+  @media (max-width: 576px) {
+    @rules();
+  }
+}
+.mq-md(@rules) {
+  @media (max-width: 768px) {
+    @rules();
+  }
+}
+.mq-lg(@rules) {
+  @media (max-width: 992px) {
+    @rules();
+  }
+}
+
+/** 页面主容器：限宽居中 + 左右留白 */
+.page-container() {
+  width: 100%;
+  max-width: var(--page-max);
+  margin: 0 auto;
+  padding: 16px;
+}
+
+/** 卡片外观 */
+.card() {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+/** 单行省略 */
+.ellipsis() {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/** 多行省略 */
+.ellipsis-multi(@lines: 2) {
+  display: -webkit-box;
+  -webkit-line-clamp: @lines;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}

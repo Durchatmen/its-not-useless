@@ -1,0 +1,34 @@
+# 目标环境：Python 3.14.7 / Windows x64
+# 本组合已实测通过：pip install -r 成功（48 个包，全部为现成 wheel，无需本地编译），
+# fastapi / pydantic / sqlalchemy / celery / redis / httpx / pyjwt 导入正常，
+# passlib+bcrypt 哈希与校验正常，SQLAlchemy 2.0 create_all 建表与读写正常。
+
+# --- Web 框架 ---
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
+python-multipart==0.0.32
+
+# --- 配置与校验 ---
+pydantic==2.13.5
+pydantic-settings==2.15.0
+python-dotenv==1.2.3
+
+# --- 数据库（ORM）---
+sqlalchemy==2.0.54
+pymysql==1.2.3
+cryptography==50.0.1
+
+# --- 认证 ---
+pyjwt==2.14.0
+passlib==1.7.4
+# passlib 1.7.4 与 bcrypt>=4.1 不兼容：passlib 依赖 bcrypt.__about__ 探测版本（4.1 已移除），
+# 且 bcrypt 5.0 取消了 72 字节自动截断，会导致 ctx.hash() 直接抛 ValueError。
+# 已实测：4.0.1 下 hash/verify 正常，5.0.0 下失败。
+bcrypt==4.0.1
+
+# --- 异步任务与缓存 ---
+celery==5.6.3
+redis==8.1.0
+
+# --- 外部调用 ---
+httpx==0.28.1
