@@ -1,0 +1,73 @@
+/**
+ * 无障碍主题 —— 大字模式 / 高对比度（需求分析 F4.2）
+ * 由 stores/app.js 在 <html> 上切换 class 驱动。
+ */
+
+/* ---------------- 大字模式 ---------------- */
+html.large-font {
+  font-size: 18px;
+
+  body {
+    font-size: 1.05rem;
+    line-height: 1.8;
+  }
+
+  /* Element Plus 控件同步放大，避免文字溢出按钮 */
+  .el-button {
+    height: auto;
+    min-height: 40px;
+    padding: 10px 20px;
+    font-size: 1.05rem;
+  }
+
+  .el-input__inner,
+  .el-textarea__inner,
+  .el-select__placeholder,
+  .el-form-item__label {
+    font-size: 1.05rem;
+  }
+
+  .el-input__wrapper {
+    padding: 8px 12px;
+  }
+
+  .el-message,
+  .el-notification__content {
+    font-size: 1.05rem;
+  }
+}
+
+/* ---------------- 高对比度 ---------------- */
+html.high-contrast {
+  --primary: #00695c;
+  --primary-dark: #004d40;
+  --primary-light: #d7f0ec;
+
+  --text: #000000;
+  --text-2: #1f2937;
+  --text-3: #374151;
+
+  --line: #6b7280;
+  --bg: #ffffff;
+  --card: #ffffff;
+  --shadow: none;
+
+  /* 键盘导航焦点必须清晰可见 */
+  :focus-visible {
+    outline: 3px solid #000000;
+    outline-offset: 2px;
+  }
+}
+
+/* ---------------- 读屏辅助 ---------------- */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
