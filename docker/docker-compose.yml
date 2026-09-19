@@ -1,29 +1,10 @@
 name: hospital-ai
 
-services:
-  # ---------- MySQL 8.0 ----------
-  mysql:
-    image: mysql:8.0
-    container_name: hospital-mysql
-    restart: unless-stopped
-    environment:
-      MYSQL_ROOT_PASSWORD: root123456
-      MYSQL_DATABASE: hospital_ai
-      TZ: Asia/Shanghai
-    command:
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
-      - --default-time-zone=+08:00
-    ports:
-      - "3306:3306"
-    volumes:
-      - ./volumes/mysql:/var/lib/mysql
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot123456"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
+# 注意：MySQL 不在此编排内，使用本机已安装的 MySQL 实例（127.0.0.1:3306）。
+# 需自行建库：CREATE DATABASE hospital_ai DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_unicode_ci;
+# 表由后端 ORM 启动时 create_all 创建，无需建表 SQL。
 
+services:
   # ---------- Redis 7 ----------
   redis:
     image: redis:7
