@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/python.exe -m compileall -q app/core/config.py app/services/rag/collections.py app/services/rag/milvus_client.py app/services/rag/embedding.py app/services/rag/ingest.py scripts/build_knowledge_base.py)",
+      "Bash(echo \"compile exit=$?\")",
+      "Bash(.venv/Scripts/python.exe -c ' *)",
+      "Bash(.venv/Scripts/python.exe -m py_compile app/core/config.py app/services/rag/ingest.py app/services/rag/milvus_client.py app/services/rag/collections.py app/services/rag/embedding.py scripts/build_knowledge_base.py)",
+      "Bash(.venv/Scripts/python.exe -X utf8 -c ' *)"
+    ]
+  }
+}
