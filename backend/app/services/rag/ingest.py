@@ -40,7 +40,7 @@ from typing import Literal
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 
 from app.core.config import settings
-from app.services.rag import milvus_client
+from app.services.rag import bm25, milvus_client
 from app.services.rag.collections import KbCollection, resolve_by_directory, resolve_by_relative_path
 from app.services.rag.milvus_client import IngestedChunk
 
@@ -548,6 +548,9 @@ def ingest_document(doc: SourceDoc, *, reset: bool = False) -> IngestResult:
         vectors = embed_texts([c.text for c in chunks])
 
         client = milvus_client.get_client()
+        # 这个库的正文即将变化，先让 BM25 旧索引失效 —— 下一次检索会重新拉全量重建。
+        # 放在写库之前而不是之后：即便后续写入失败，缓存也已经失效，不会读到半新半旧。
+        bm25.reset(collection_name)
         if reset:
             milvus_client.drop_collection(client, collection_name)
         milvus_client.ensure_collection(client, collection_name, settings.embedding_dim)
