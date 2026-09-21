@@ -1,23 +1,29 @@
 """数据库引擎与会话工厂（MySQL 8.0 + PyMySQL）。
 
-连接串优先取环境变量 DATABASE_URL，未配置时回落到演示环境的远程库。
+
+jm
+连接串只认 backend/.env 里的 DATABASE_URL（由 app.core.config 读取），
+本模块不存第二份默认值 —— 否则换库时容易漏改一处，静默连到旧机器。
 """
 
 from __future__ import annotations
 
-import os
 from collections.abc import Iterator
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-DEFAULT_DATABASE_URL = (
-    "mysql+pymysql://root:123456@192.168.21.41:3306/hospital_ai?charset=utf8mb4"
+from app.core.config import settings
+
+
+DATABASE_URL = settings.database_url
+
+if not DATABASE_URL:
+    raise RuntimeError("未配置 DATABASE_URL，请在 backend/.env 中填写数据库连接串")
+
+engine = create_engine(
+    DATABASE_URL, pool_pre_ping=True, pool_recycle=3600, echo=settings.db_echo
 )
-
-DATABASE_URL = os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL)
-
-engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=3600)
 
 SessionLocal = sessionmaker(bind=engine, class_=Session, expire_on_commit=False)
 

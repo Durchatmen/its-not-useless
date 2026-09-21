@@ -128,10 +128,34 @@ class Settings(BaseSettings):
     llm_omni_model: str = "qwen-omni-turbo"
 
     # ---------- 其他（本模块暂未使用，保留以对齐 .env）----------
-    amap_web_key: str = ""
     llm_provider: str = ""
     his_base_url: str = ""
     his_enabled: bool = False
+
+    # ---------- 短信网关（注册验证码，接口文档 3.1.3）----------
+    sms_gateway_url: str = ""
+    sms_api_key: str = ""
+    sms_sign_name: str = "智慧医疗"
+    sms_timeout: float = 8.0
+    # 验证码有效期（分钟）与同号同场景重发间隔（秒）
+    sms_code_ttl_minutes: int = 5
+    sms_resend_seconds: int = 60
+
+    # ---------- 医院与院外导航（接口文档 API-20）----------
+    hospital_code: str = "H0001"
+    hospital_name: str = "示范医院"
+    hospital_latitude: float = 30.274084
+    hospital_longitude: float = 120.155070
+    # 医院主入口坐标（院外导航默认终点）；留 0 时回落到医院坐标
+    hospital_gate_latitude: float = 0.0
+    hospital_gate_longitude: float = 0.0
+
+    # ---------- 高德开放平台 ----------
+    # Web 服务 Key（路径规划/POI/静态图）；留空时院外导航直接返回 5004
+    amap_web_key: str = ""
+    amap_base_url: str = "https://restapi.amap.com"
+    amap_city: str = "杭州"
+    amap_timeout: float = 8.0
 
     # ----- 派生属性 -----
 
