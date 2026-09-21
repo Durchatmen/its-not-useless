@@ -1,5 +1,7 @@
 """数据库引擎与会话工厂（MySQL 8.0 + PyMySQL）。
 
+
+jm
 连接串只认 backend/.env 里的 DATABASE_URL（由 app.core.config 读取），
 本模块不存第二份默认值 —— 否则换库时容易漏改一处，静默连到旧机器。
 """
@@ -12,6 +14,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
+
 
 DATABASE_URL = settings.database_url
 

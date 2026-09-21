@@ -24,6 +24,7 @@ import random
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from itertools import count
+from typing import Optional
 
 import bcrypt
 from sqlalchemy import Engine, URL, create_engine, inspect, text, update
@@ -994,12 +995,48 @@ def _build_exam_reports(
 PAY_CHANNELS = ["WECHAT", "ALIPAY"]
 
 
+def _treatment_bill(
+    idx: int,
+    *,
+    patient_id: str,
+    appointment_id: Optional[str],
+    title: str,
+    related_type: str,
+    related_id: str,
+    amount: Decimal,
+    visit_date: date,
+    unpaid: bool,
+) -> Bill:
+    """构造一条就诊缴费账单。
+
+    待缴费的检查单要配一张未缴费账单（`unpaid=True`）：没有它，「待缴费 → 待检查」
+    这条流程（接口文档 API-17 举的例子）就没有数据可演示。
+    """
+    cover, self_pay = _split_amount(amount, 0.5)
+    return Bill(
+        bill_id=f"BILL{idx:04d}",
+        patient_id=patient_id,
+        appointment_id=appointment_id,
+        bill_type="TREATMENT",
+        bill_title=title,
+        related_type=related_type,
+        related_id=related_id,
+        amount=amount,
+        insurance_cover=cover,
+        self_pay=self_pay,
+        pay_status="UNPAID" if unpaid else "PAID",
+        paid_at=None if unpaid else datetime.combine(visit_date, time(16, idx % 60)),
+        invoice_no=None if unpaid else f"INV{visit_date:%Y%m%d}{idx:05d}",
+        external_no=f"HIS-BILL-{idx:06d}",
+    )
+
+
 def _build_bills(
     appointments: list[Appointment],
     exams: list[Exam],
     prescriptions: list[Prescription],
 ) -> list[Bill]:
-    """前 40 条为挂号缴费账单，后 10 条为检查/处方引起的就诊缴费账单。"""
+    """前 40 条为挂号缴费账单，后若干条为检查/处方引起的就诊缴费账单。"""
     route_by_appointment = {a.appointment_id: a.appt_date for a in appointments}
     rows: list[Bill] = []
     idx = 0
@@ -1043,6 +1080,7 @@ def _build_bills(
     visited_prescriptions = [
         p for p in prescriptions if p.appointment_id not in canceled
     ]
+    billed_exam_ids: set[str] = set()
     for exam, prescription in zip(visited_exams[:5], visited_prescriptions[:5]):
         for source, is_exam in ((exam, True), (prescription, False)):
             idx += 1
@@ -1050,30 +1088,45 @@ def _build_bills(
                 amount = _money(280.00)
                 title, related_type, related_id = f"{exam.exam_name}检查费", "EXAM", exam.exam_id
                 patient_id, appointment_id = exam.patient_id, exam.appointment_id
+                billed_exam_ids.add(exam.exam_id)
             else:
                 amount = prescription.total_amount
                 title, related_type, related_id = "门诊处方药费", "PRESCRIPTION", prescription.prescription_id
                 patient_id, appointment_id = prescription.patient_id, prescription.appointment_id
-            visit_date = route_by_appointment.get(appointment_id, TODAY)
-            cover, self_pay = _split_amount(amount, 0.5)
             rows.append(
-                Bill(
-                    bill_id=f"BILL{idx:04d}",
+                _treatment_bill(
+                    idx,
                     patient_id=patient_id,
                     appointment_id=appointment_id,
-                    bill_type="TREATMENT",
-                    bill_title=title,
+                    title=title,
                     related_type=related_type,
                     related_id=related_id,
                     amount=amount,
-                    insurance_cover=cover,
-                    self_pay=self_pay,
-                    pay_status="PAID",
-                    paid_at=datetime.combine(visit_date, time(16, idx % 60)),
-                    invoice_no=f"INV{visit_date:%Y%m%d}{idx:05d}",
-                    external_no=f"HIS-BILL-{idx:06d}",
+                    visit_date=route_by_appointment.get(appointment_id, TODAY),
+                    # 待缴费的检查单，账单也得是待缴费的，否则状态自相矛盾
+                    unpaid=is_exam and exam.exam_status == "WAIT_PAY",
                 )
             )
+
+    # 其余待缴费的检查单补一张未缴费账单：原先只有 6 条待缴费检查单，
+    # 其中 5 条完全没有账单，导致「待缴费列表」是空的。
+    for exam in visited_exams:
+        if exam.exam_status != "WAIT_PAY" or exam.exam_id in billed_exam_ids:
+            continue
+        idx += 1
+        rows.append(
+            _treatment_bill(
+                idx,
+                patient_id=exam.patient_id,
+                appointment_id=exam.appointment_id,
+                title=f"{exam.exam_name}检查费",
+                related_type="EXAM",
+                related_id=exam.exam_id,
+                amount=_money(280.00),
+                visit_date=route_by_appointment.get(exam.appointment_id, TODAY),
+                unpaid=True,
+            )
+        )
 
     return rows
 
