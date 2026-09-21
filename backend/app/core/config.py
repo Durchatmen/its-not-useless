@@ -127,10 +127,25 @@ class Settings(BaseSettings):
     # 语音转写用的全模态模型；不支持 audioFormat=amr（需先转码成 wav/mp3）
     llm_omni_model: str = "qwen-omni-turbo"
 
+    # ---------- 挂号（接口文档 API-15 叫号提醒）----------
+    # 单个患者的平均问诊分钟数，用于按「前方人数 × 该值」估算预计叫号时间。
+    # 库里不存 HIS 的实时叫号队列（数据库设计文档 4.4 建议轮询不落库），
+    # 因此这个值是本地估算的参数，接 HIS 后应改为直接读队列。
+    appointment_avg_minutes: int = 8
+
     # ---------- 其他（本模块暂未使用，保留以对齐 .env）----------
     llm_provider: str = ""
     his_base_url: str = ""
     his_enabled: bool = False
+
+    # ---------- 跨域（前端直连后端时需要；走 Vite 代理时用不到）----------
+    # 逗号分隔的 Origin 列表；开发环境默认放行 Vite 的 5173 端口。
+    # 生产环境务必在 .env 里显式覆盖，不要留这个默认值。
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     # ---------- 短信网关（注册验证码，接口文档 3.1.3）----------
     sms_gateway_url: str = ""

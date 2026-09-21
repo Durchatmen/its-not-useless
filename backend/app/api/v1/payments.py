@@ -3,7 +3,7 @@
 与 bills.py 同样的薄适配层，业务规则在 `services/payment_service.py`，
 账单侧的领域错误与落库动作复用 `services/bill_service.py`。
 
-⚠ 与 bills.py 共用同一组 core 约定（get_current_user / ok / BizError），
+⚠ 与 bills.py 共用同一组 core 依赖（get_current_user / Envelope.ok / BizError），
    详情见 `api/v1/bills.py` 的模块说明。
 """
 
@@ -14,9 +14,9 @@ from typing import Annotated, Any, Callable, Optional
 from fastapi import APIRouter, Body, Depends, Path
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_current_user  # type: ignore[attr-defined]
-from app.core.errors import BizError  # type: ignore[attr-defined]
-from app.core.response import ok  # type: ignore[attr-defined]
+from app.core.deps import get_current_user
+from app.core.errors import BizError
+from app.core.response import Envelope
 from app.db.session import get_session
 from app.schemas.payment import PaymentCreateRequest
 from app.services import payment_service
@@ -36,7 +36,7 @@ def _call(action: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         data = action(*args, **kwargs)
     except BillError as exc:
         raise BizError(exc.code, exc.message) from exc
-    return ok(data)
+    return Envelope.ok(data)
 
 
 @router.post("", summary="API-18 创建支付单")

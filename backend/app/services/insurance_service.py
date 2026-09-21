@@ -11,13 +11,20 @@
 所以 estimateCard 经常是 None —— 拿不到知识库依据时就不编数字，只回「以当地医保局
 最新规定为准」。这既是既定决策（报销数值完全交给知识库），也是医保咨询的合规底线。
 
-AI 钩子（检索链与大模型都还没实现，缺失时降级而不是报错）：
+AI 钩子（检索链或大模型不可用时降级而不是报错）：
 
-    set_retriever() / set_llm()    注入真实实现
+    set_retriever() / set_llm()    注入实现，传 None 恢复默认
     _get_retriever() / _get_llm()  先看注入值，再懒加载 app.services.rag.retriever
-                                   与 app.services.llm。这两个模块目前是 0 字节空桩，
-                                   导入必然抛 ImportError，捕获后返回 None，
-                                   主流程照常走「检索原文作答」或「能力受限提示」。
+                                   与 app.services.llm
+
+    这两个模块的签名与本模块约定的钩子形态不一样（retrieve 收 collection 关键字参数
+    并返回 RetrievedChunk，chat 收 messages 列表），由 _retriever_from_kb /
+    _llm_from_chat 在各层对齐 —— 别再把裸函数直接当钩子交出去，调用时会因为参数
+    对不上抛 TypeError，又被 _ask_llm 的兜底 except 吞掉，表现成「配了也用不上」。
+
+    检索链缺 AI 依赖（requirements-ai.txt）、未配 LLM_API_KEY、网络不通，
+    都会在这里或 _ask_llm / _retrieve 处兜住，主流程照常走「检索原文作答」
+    或「能力受限提示」。
 """
 
 from __future__ import annotations
@@ -143,31 +150,83 @@ def set_llm(fn: LlmFn | None) -> None:
     _llm = fn
 
 
+def _retriever_from_kb(retrieve: Callable[..., Sequence[Any]]) -> RetrieverFn:
+    """把 `retriever.retrieve` 适配成本模块的 (query, top_k) 形态。
+
+    retrieve 的签名是 `retrieve(query, collection, *, top_k)`，返回 RetrievedChunk
+    数据类；而本模块约定 RetrieverFn 是 `(query, top_k)`，且 `_retrieve` 只认
+    KbChunk 与 Mapping（不认 RetrievedChunk）—— 差的一层在这里对齐，
+    免得调用方和注入接口被迫跟着改。
+    """
+
+    def search(query: str, top_k: int) -> list[dict[str, Any]]:
+        chunks = retrieve(query, KB_COLLECTION, top_k=top_k)
+        return [
+            {
+                "text": chunk.text,
+                "source_file": chunk.source_file,
+                "category": chunk.category,
+                "score": chunk.score,
+            }
+            for chunk in chunks
+        ]
+
+    return search
+
+
+def _llm_from_chat(chat: Callable[..., str]) -> LlmFn:
+    """把 `llm.chat` 适配成本模块的 (system, user) 形态。
+
+    本模块的提示词是「系统段 + 用户段」两段；llm.chat 收的是 messages 列表。
+    曾经直接把 chat 当 LlmFn 交出去，调用时 `provider(system, user)` 抛 TypeError，
+    又被 _ask_llm 的兜底 except 吞掉 —— 表现是「大模型配好了但一直不出声」。
+    """
+
+    def ask(system: str, user: str) -> str:
+        return chat(
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ]
+        )
+
+    return ask
+
+
 def _get_retriever() -> RetrieverFn | None:
-    """取检索实现：先看注入值，再试 app.services.rag.retriever（当前是空桩）。"""
+    """取检索实现：先看注入值，再看 app.services.rag.retriever 的默认实现。
+
+    宽捕 Exception 而不是 ImportError：检索链还拖着可选依赖（milvus / torch 等，
+    见 requirements-ai.txt），缺依赖时抛的未必是 ImportError，但结论一样 ——
+    没有检索就明说能力受限，不能让医保咨询整个接口挂掉。
+    """
     global _retriever
     if _retriever is not None:
         return _retriever
     try:
-        from app.services.rag.retriever import search
-    except ImportError:
-        logger.debug("app.services.rag.retriever 尚未实现，医保咨询降级为无引用作答")
+        from app.services.rag.retriever import retrieve
+    except Exception:  # noqa: BLE001 - 见 docstring
+        logger.debug("知识库检索链不可用，医保咨询降级为无引用作答", exc_info=True)
         return None
-    _retriever = search
+    _retriever = _retriever_from_kb(retrieve)
     return _retriever
 
 
 def _get_llm() -> LlmFn | None:
-    """取大模型实现：先看注入值，再试 app.services.llm（当前是空桩）。"""
+    """取大模型实现：先看注入值，再看 app.services.llm。
+
+    未配 LLM_API_KEY 时 `chat` 会抛 LLMError，由 _ask_llm 兜住并回落成「摘录知识库原文」，
+    所以这里不必自己判断 Key 是否填了。
+    """
     global _llm
     if _llm is not None:
         return _llm
     try:
         from app.services.llm import chat
-    except ImportError:
-        logger.debug("app.services.llm 尚未实现，医保咨询改用检索原文作答")
+    except Exception:  # noqa: BLE001 - 大模型客户端不可用时回落成摘录原文
+        logger.debug("大模型客户端不可用，医保咨询改用检索原文作答", exc_info=True)
         return None
-    _llm = chat
+    _llm = _llm_from_chat(chat)
     return _llm
 
 

@@ -7,8 +7,11 @@ AI 部分的两点取舍：
 1. 检查注意事项、报告解读都先走知识库检索（kb_exam / kb_report）再套模板拼装，
    检索失败就退回数据库里的缓存字段（t_exam.precautions、t_exam_report.ai_analysis），
    不把「知识库抖一下」放大成接口 5003 —— 缓存字段本身就是设计文档里给这两件事留的落点。
-2. 大模型调用收敛在 `_llm_*` 两个函数里：当前 .env 未配 LLM_PROVIDER / LLM_API_KEY，
-   它们返回 None，于是走规则模板；接入大模型后只改这两个函数，响应结构不变。
+2. 大模型调用收敛在 `_llm_*` 两个函数里（分别对接报告 Agent 与检查助手 Agent），
+   它们只产出「一段解读」/「几条注意事项」，abnormalItems、riskLevel、advice、
+   sources 这些字段仍由本模块按知识库与规则表产出，响应结构对前端不变。
+   .env 没配 LLM_API_KEY、模型调用失败、模型输出为空，一律返回空值走规则模板 ——
+   大模型是增强项，不该让检查报告的接口跟着一起挂。
 """
 
 from __future__ import annotations
@@ -567,16 +570,37 @@ def _build_advice(risk_level: str, abnormal_items: Sequence[ExamReportItem], sug
 def _llm_analyze(
     exam: Exam,
     report: ExamReport,
-    items: Sequence[ExamReportItem],
+    meanings: Sequence[AbnormalItemMeaning],
     hits: Sequence[dict[str, Any]],
 ) -> Optional[str]:
-    """报告 Agent 入口（预留）。
+    """报告 Agent 入口：让大模型把逐项含义写成一段通读的解读，失败返回 None。
 
-    当前 .env 未配置 LLM_PROVIDER / LLM_API_KEY，返回 None 由规则模板兜底。
-    接入大模型后在此处调用 Agent 并返回其解读文本，abnormalItems / riskLevel /
-    advice / sources 仍由本模块产出，响应结构对前端保持不变。
+    abnormalItems / riskLevel / advice / sources 仍由本模块产出，响应结构对前端不变。
+
+    交给模型的是 `meanings`（规则表算出的逐项通俗含义）而不是全部指标项：
+    这些含义已经过知识库核对（见 _kb_entry_matches），模型据此组织语言即可，
+    既不用自己判断数值高低（说反了就成事故），也没有臆测的余地。
+
+    未配 LLM_API_KEY、网络不通、模型输出为空、AI 依赖没装 —— 一律返回 None 走规则模板：
+    检查报告解读不该因为大模型抖一下而整个接口失败。
     """
-    return None
+    if not meanings and not (report.report_content or "").strip():
+        return None  # 没有可解读的素材，模型只能编，直接走模板
+    try:
+        from app.services.rag.agents import report_agent
+
+        return (
+            report_agent.analyze(
+                exam_name=exam.exam_name,
+                report_content=report.report_content or "",
+                items=[item.model_dump() for item in meanings],
+                hits=list(hits),
+            )
+            or None
+        )
+    except Exception as exc:  # noqa: BLE001 - 大模型是增强项，失败即回规则模板
+        logger.warning("报告解读大模型调用失败，改用规则模板: %s", exc)
+        return None
 
 
 def _template_analysis(
@@ -608,7 +632,7 @@ def analyze_report(
     user_id: str,
     payload: Optional[ExamAnalysisRequest] = None,
 ) -> ExamAnalysisData:
-    """报告解读：结构化指标 → 异常项逐条检索报告知识库 → 模板拼装（LLM 就绪后替换）。"""
+    """报告解读：结构化指标 → 异常项逐条检索报告知识库 → 大模型组织语言，失败走模板。"""
     exam = _get_exam(session, exam_id, user_id)
     payload = payload or ExamAnalysisRequest()
 
@@ -655,7 +679,7 @@ def analyze_report(
     risk_level = _max_risk(report.risk_level, _derive_risk_level(exam.exam_name, abnormal))
     advice = _build_advice(risk_level, abnormal, suggests)
 
-    analysis = _llm_analyze(exam, report, items, used_hits) or _template_analysis(report, items, meanings)
+    analysis = _llm_analyze(exam, report, meanings, used_hits) or _template_analysis(report, items, meanings)
 
     # 解读结果回写缓存（t_exam_report.ai_analysis 的设计用途），下次直接复用；
     # 缓存的风险等级偏低时一并纠正，否则错误的低等级会一直留在库里
@@ -687,9 +711,24 @@ def analyze_report(
 # --------------------------------------------------------------------------- #
 
 
-def _llm_precautions(exam: Exam, sections: dict[str, str], hits: Sequence[dict[str, Any]]) -> Optional[str]:
-    """检查助手 Agent 入口（预留），未配大模型时返回 None 走模板。"""
-    return None
+def _llm_precautions(exam: Exam, hits: Sequence[dict[str, Any]]) -> list[str]:
+    """检查助手 Agent 入口：返回分条的注意事项，失败返回空列表走模板。
+
+    返回列表而不是整段文本：`precautions` 与语音播报 `voiceText` 共用同一批句子，
+    两边文案因此天然一致（见 get_precautions）。
+
+    一条检查知识库资料都没命中时不调模型 —— 它只能自己编准备要求（「空腹 8 小时」
+    这类，编错了患者就白跑一趟），而模板那边还有库内缓存 t_exam.precautions 可用。
+    """
+    if not hits:
+        return []
+    try:
+        from app.services.rag.agents import exam_agent
+
+        return exam_agent.precautions(exam_name=exam.exam_name, hits=list(hits))
+    except Exception as exc:  # noqa: BLE001 - 大模型是增强项，失败即回规则模板
+        logger.warning("检查注意事项大模型调用失败，改用规则模板: %s", exc)
+        return []
 
 
 def _template_precautions(exam: Exam, sections: dict[str, str], cached: Optional[str]) -> list[str]:
@@ -718,8 +757,10 @@ def get_precautions(session: Session, exam_id: str, user_id: str) -> ExamPrecaut
     hits = _search_many([(KB_EXAM, f"{exam.exam_name} 检查目的 检查流程 注意事项", 1)])[0]
     sections = _split_exam_kb(hits[0]["text"]) if hits else {}
 
-    lines = _template_precautions(exam, sections, exam.precautions)
-    precautions = _llm_precautions(exam, sections, hits) or "\n".join(lines)
+    # 大模型与模板产出的都是「分条文案」，二者共用下面这批 lines：
+    # 展示用的 precautions 与语音播报的 voiceText 由同一份内容拼出，不会各说各话
+    lines = _llm_precautions(exam, hits) or _template_precautions(exam, sections, exam.precautions)
+    precautions = "\n".join(lines)
 
     purpose = _plain(sections.get("检查目的")) or None
     process = _plain(sections.get("检查流程")) or None

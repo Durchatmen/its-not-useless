@@ -4,14 +4,13 @@
 把领域错误翻成接口文档 2.5 的错误码、套统一信封），业务规则全在
 `services/bill_service.py`。
 
-⚠ 对接说明（core/ 目前是空文件，本模块按《环境搭建方案》§4.7 的约定引用）：
-    app.core.deps.get_current_user  —— Bearer 鉴权依赖，返回 t_user 对象（取 .user_id）
-    app.core.response.ok            —— 统一信封 code/message/data/timestamp
-    app.core.errors.BizError        —— 业务异常，由全局异常处理器输出信封
-  这三处是唯一的耦合点，core 落地时若命名不同，改上面的 import 即可。
+依赖的公共基建（app/core/）：
+    get_current_user  —— Bearer 鉴权依赖，返回 t_user 对象（取 .user_id）
+    Envelope.ok       —— 统一信封 code/message/data/timestamp
+    BizError          —— 业务异常，由 core/middleware.py 的全局异常处理器输出信封
 
-另：请求体的字段校验失败（如 payChannel 缺失）由 FastAPI 抛 422，按项目约定
-    由 core 的全局异常处理器统一翻成 4001，本模块不重复拦截。
+另：请求体的字段校验失败（如 payChannel 缺失）由 FastAPI 抛 422，
+    core/middleware.py 的全局异常处理器统一翻成 4001，本模块不重复拦截。
 """
 
 from __future__ import annotations
@@ -21,9 +20,9 @@ from typing import Annotated, Any, Callable, Optional
 from fastapi import APIRouter, Body, Depends, Path, Query
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_current_user  # type: ignore[attr-defined]
-from app.core.errors import BizError  # type: ignore[attr-defined]
-from app.core.response import ok  # type: ignore[attr-defined]
+from app.core.deps import get_current_user
+from app.core.errors import BizError
+from app.core.response import Envelope
 from app.db.session import get_session
 from app.schemas.bill import BillSettleRequest
 from app.services import bill_service
@@ -47,7 +46,7 @@ def _call(action: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         data = action(*args, **kwargs)
     except BillError as exc:
         raise BizError(exc.code, exc.message) from exc
-    return ok(data)
+    return Envelope.ok(data)
 
 
 @router.get("", summary="API-16 查询医院账单")

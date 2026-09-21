@@ -41,3 +41,15 @@ class Patient(Base, TimestampMixin):
     is_default: Mapped[int] = mapped_column(
         SmallInteger, nullable=False, default=0, server_default="0", comment="是否默认就诊人：1是 0否"
     )
+    # 软删标记：接口文档 API-07 要求「解绑并删除就诊人」，而数据库设计文档的原则是
+    # 「业务删除一律用状态字段软控制」（就诊人身上挂着挂号单、病历、账单等历史数据，
+    # 物理删除会连带断掉这些记录的就诊人归属）。故加此列，列表与详情一律过滤
+    # is_deleted=0；同账号下 uk_user_idcard 唯一键仍然生效，因此「删掉再加同一个人」
+    # 走的是「复活既有行」而不是新增（见 services/patient_service.create_patient）。
+    is_deleted: Mapped[int] = mapped_column(
+        SmallInteger,
+        nullable=False,
+        default=0,
+        server_default="0",
+        comment="软删标记：1已删除 0正常",
+    )

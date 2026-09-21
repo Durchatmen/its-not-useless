@@ -1,29 +1,34 @@
 """多模态预诊分诊的 HTTP 接口（接口文档 3.3：API-08 提交、API-09 查询历史）。
 
-本文件只做 HTTP 层的事：解析入参、拿 user_id、装配统一信封。业务一行都不在这里，
+本文件只做 HTTP 层的事：解析入参、取当前用户、装配统一信封。业务一行都不在这里，
 全在 `app.services.ai_service`；SSE 帧的字面格式在 `app.services.sse`。
 
 `stream=true` 按文档 API-08 的说明不再套 JSON 信封，直接回 `text/event-stream`；
 其余情况一律 `{code, message, data, timestamp}`（文档 2.4）。
 
-`router` 由 `app/api/v1/router.py` 挂载 —— 那个文件属队友，此处不碰。
+鉴权走 core 的 `get_current_user`（core/deps.py）：解 JWT **并查库**取 t_user，
+因此账号被停用（status != 1）时会和其他模块一样被 403 拦下。
+
+⚠ 流式分支的鉴权失败为什么仍要非 2xx：前端 `api/sse.js` 只看 `response.ok`，
+   不解析 JSON 信封。所以 core/middleware.py 对「Accept: text/event-stream 的请求 +
+   4002/4003」返回 401/403 而不是 200 + 信封（见那边的 _STREAM_STATUS）。
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
-from datetime import datetime
-from typing import Annotated
-from zoneinfo import ZoneInfo
+from typing import Annotated, Any
 
-import jwt
-from fastapi import APIRouter, Depends, Header, Query
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
+from app.core.deps import get_current_user
+from app.core.errors import BizError, ErrorCode
+from app.core.response import Envelope
 from app.db.session import SessionLocal, get_session
+from app.models import User
 from app.schemas.ai import (
     MultiModalMessageData,
     MultiModalMessageRequest,
@@ -38,13 +43,21 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ai", tags=["AI 预诊分诊"])
 
-# 文档 2.5 通用错误码表
-_CODE_SUCCESS = 0
-_CODE_PARAM_INVALID = 4001
-_CODE_UNAUTHORIZED = 4002
-_CODE_FORBIDDEN = 4003
-_CODE_LLM_FAILED = 5002
-_CODE_INTERNAL = 9999
+SessionDep = Annotated[Session, Depends(get_session)]
+UserDep = Annotated[User, Depends(get_current_user)]
+
+# HTTP 状态码 → 接口文档 2.5 业务码。
+# 2.5 没有「资源不存在」这一档，404 归进参数校验，是谁不存在由 message 说明。
+_STATUS_TO_CODE: dict[int, int] = {
+    400: int(ErrorCode.PARAM_INVALID),
+    401: int(ErrorCode.UNAUTHORIZED),
+    403: int(ErrorCode.FORBIDDEN),
+    404: int(ErrorCode.PARAM_INVALID),
+    # 语音/图片能力未接入，按服务不可用上报，比 9999 更贴近用户看到的话术
+    501: int(ErrorCode.LLM_FAILED),
+    502: int(ErrorCode.LLM_FAILED),
+    503: int(ErrorCode.RAG_FAILED),
+}
 
 _SSE_HEADERS = {
     "Cache-Control": "no-cache",
@@ -53,58 +66,11 @@ _SSE_HEADERS = {
 }
 
 
-# ---------------------------------------------------------------------------
-# 临时：core 层还没提供的两块基础件
-#   app/core/deps.py      登录依赖（解 JWT 取 user_id）—— 文档 2.2
-#   app/core/response.py  统一响应信封              —— 文档 2.4
-# 这两块由队友负责，主干上仍是空文件。下面按文档写了最小实现顶上，
-# 等 core 就绪后整段删掉换成 import 即可，两个路由函数一行都不用改。
-# ---------------------------------------------------------------------------
-
-
-class _AuthFailed(Exception):
-    """令牌缺失 / 无效 / 过期，对应错误码 4002。"""
-
-
-def _current_user_id(authorization: str | None) -> str:
-    """从 `Authorization: Bearer {accessToken}` 里解出 user_id。"""
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise _AuthFailed("缺少 Authorization: Bearer 令牌")
-
-    token = authorization[7:].strip()
-    try:
-        claims = jwt.decode(token, settings.secret_key, algorithms=[settings.jwt_algorithm])
-    except jwt.PyJWTError as exc:
-        raise _AuthFailed(f"令牌无效或已过期：{exc}") from exc
-
-    # auth 模块尚未落定 claim 名：sub 是 JWT 惯例，另两个是常见变体，都认
-    user_id = claims.get("sub") or claims.get("userId") or claims.get("user_id")
-    if not user_id:
-        raise _AuthFailed("令牌里没有用户标识（sub / userId）")
-    return str(user_id)
-
-
-def _envelope(code: int, message: str, data) -> dict:
-    """文档 2.4 的统一信封；timestamp 按 2.1 用东八区 `yyyy-MM-dd HH:mm:ss`。"""
-    return {
-        "code": code,
-        "message": message,
-        "data": data,
-        "timestamp": datetime.now(ZoneInfo(settings.tz)).strftime("%Y-%m-%d %H:%M:%S"),
-    }
-
-
-def _error_code(status: int) -> int:
-    return {
-        400: _CODE_PARAM_INVALID,
-        401: _CODE_UNAUTHORIZED,
-        403: _CODE_FORBIDDEN,
-        # 2.5 没有「资源不存在」这一档，归进参数校验，是谁不存在由 message 说明
-        404: _CODE_PARAM_INVALID,
-        # 语音/图片能力未接入，按服务不可用上报，比 9999 更贴近用户看到的话术
-        501: _CODE_LLM_FAILED,
-        502: _CODE_LLM_FAILED,
-    }.get(status, _CODE_INTERNAL)
+def _raise_for_service_error(exc: AIServiceError) -> None:
+    """AIServiceError → BizError（service 不依赖 core，两边各自独立）。"""
+    code = _STATUS_TO_CODE.get(exc.status_code, int(ErrorCode.INTERNAL))
+    logger.warning("AI 服务失败（HTTP %s）：%s", exc.status_code, exc)
+    raise BizError(code, str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -113,56 +79,42 @@ def _error_code(status: int) -> int:
 
 
 @router.post("/multimodal/messages", response_model=None, summary="API-08 提交多模态预诊输入")
-def submit_message(
-    payload: MultiModalMessageRequest,
-    authorization: Annotated[str | None, Header()] = None,
-    db: Session = Depends(get_session),
-):
+def submit_message(payload: MultiModalMessageRequest, session: SessionDep, user: UserDep):
     """预诊分诊核心接口：文本/语音/图片进，AI 回复与分诊卡片出。
 
     同一个 sessionId 多次调用即多轮会话 —— 历史由 `ai_service` 从库里捞。
+    stream=true 时改回 SSE 流（delta / triageCard / sources / done / error）。
     """
     if payload.stream:
-        return _stream_response(payload, authorization)
+        return _stream_response(payload, user.user_id)
 
     try:
-        user_id = _current_user_id(authorization)
-    except _AuthFailed as exc:
-        return _envelope(_CODE_UNAUTHORIZED, str(exc), None)
-
-    try:
-        result = ai_service.handle_message(db, user_id=user_id, **_call_args(payload))
+        result = ai_service.handle_message(session, user_id=user.user_id, **_call_args(payload))
     except AIServiceError as exc:
-        logger.warning("API-08 失败: %s", exc)
-        return _envelope(_error_code(exc.status_code), str(exc), None)
+        _raise_for_service_error(exc)
 
-    return _envelope(_CODE_SUCCESS, "success", _to_data(result).model_dump(by_alias=True))
+    return Envelope.ok(_to_data(result).model_dump())
 
 
 @router.get("/multimodal/sessions/{session_id}", summary="API-09 查询会话历史")
 def get_session_history(
     session_id: str,
-    authorization: Annotated[str | None, Header()] = None,
+    session: SessionDep,
+    user: UserDep,
     page_num: Annotated[int, Query(alias="pageNum", ge=1)] = 1,
     page_size: Annotated[int, Query(alias="pageSize", ge=1, le=100)] = 10,
-    db: Session = Depends(get_session),
-):
+) -> Any:
     """按时间正序分页返回某会话的多轮问答记录（文档 2.1 的 total/pageNum/pageSize/list）。"""
     try:
-        user_id = _current_user_id(authorization)
-    except _AuthFailed as exc:
-        return _envelope(_CODE_UNAUTHORIZED, str(exc), None)
-
-    try:
         messages, total = ai_service.list_messages(
-            db,
-            user_id=user_id,
+            session,
+            user_id=user.user_id,
             session_id=session_id,
             page_num=page_num,
             page_size=page_size,
         )
     except AIServiceError as exc:
-        return _envelope(_error_code(exc.status_code), str(exc), None)
+        _raise_for_service_error(exc)
 
     data = SessionHistoryData(
         total=total,
@@ -180,7 +132,7 @@ def get_session_history(
             for item in messages
         ],
     )
-    return _envelope(_CODE_SUCCESS, "success", data.model_dump(by_alias=True))
+    return Envelope.ok(data.model_dump())
 
 
 # ---------------------------------------------------------------------------
@@ -215,15 +167,8 @@ def _to_data(result: ai_service.PreConsultResult) -> MultiModalMessageData:
     )
 
 
-def _stream_response(payload: MultiModalMessageRequest, authorization: str | None):
-    try:
-        user_id = _current_user_id(authorization)
-    except _AuthFailed as exc:
-        # 前端流式分支只看 response.ok（`api/sse.js`），鉴权失败必须用非 2xx 表达
-        return JSONResponse(
-            status_code=401, content=_envelope(_CODE_UNAUTHORIZED, str(exc), None)
-        )
-
+def _stream_response(payload: MultiModalMessageRequest, user_id: str) -> StreamingResponse:
+    """流式分支：鉴权已由 UserDep 完成，这里只管把生成器包成 SSE 响应。"""
     return StreamingResponse(
         _stream_frames(payload, user_id),
         media_type="text/event-stream",

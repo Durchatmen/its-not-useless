@@ -8,7 +8,7 @@ t_prescription / t_prescription_item / t_medication，并经 t_appointment
 关联 t_department / t_doctor 取科室与医生名。
 
 依赖的公共模块（非本模块职责，由公共基建提供）：
-  app.core.errors.ApiError  —— 业务异常，签名 ApiError(code, message)
+  app.core.errors.BizError  —— 业务异常，签名 BizError(code, message)
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.errors import ApiError
+from app.core.errors import BizError
 from app.models.appointment import Appointment
 from app.models.department import Department
 from app.models.doctor import Doctor
@@ -77,7 +77,7 @@ def _resolve_patient(db: Session, user_id: str, patient_id: Optional[str]) -> Pa
     if patient_id:
         patient = db.get(Patient, patient_id)
         if patient is None or patient.user_id != user_id:
-            raise ApiError(ACCESS_DENIED, "无权访问该资源")
+            raise BizError(ACCESS_DENIED, "无权访问该资源")
         return patient
 
     patient = db.scalar(
@@ -87,7 +87,7 @@ def _resolve_patient(db: Session, user_id: str, patient_id: Optional[str]) -> Pa
         .limit(1)
     )
     if patient is None:
-        raise ApiError(PATIENT_INVALID, "就诊人信息校验失败")
+        raise BizError(PATIENT_INVALID, "就诊人信息校验失败")
     return patient
 
 

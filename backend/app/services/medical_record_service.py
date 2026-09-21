@@ -10,7 +10,7 @@ HIS 就绪后只需把 _query_records 换成服务层调用，返回结构不变
   2. 二者都没有时用本地术语词典生成通俗化解读，保证接口随时可联调。
 
 依赖的公共模块（非本模块职责，由公共基建提供）：
-  app.core.errors.ApiError  —— 业务异常，签名 ApiError(code, message)
+  app.core.errors.BizError  —— 业务异常，签名 BizError(code, message)
   app.utils.mask.mask_name  —— 姓名脱敏，保留首末字符，如“张*生”“张*”
 """
 
@@ -25,7 +25,7 @@ from typing import Any, Optional
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.errors import ApiError
+from app.core.errors import BizError
 from app.models.department import Department
 from app.models.doctor import Doctor
 from app.models.medical_record import MedicalRecord
@@ -203,7 +203,9 @@ async def _run_agent(
 def _load_default_agent() -> Optional[InterpretAgent]:
     """惰性探测 app.services.rag.agents.record_agent.interpret。
 
-    AI 模块目前为空，探测不到就返回 None 走词典兜底，保证本模块始终可运行。
+    惰性而不是模块级导入：Agent 那条链拖着可选依赖（见 requirements-ai.txt），
+    缺依赖时本模块其余接口仍要能用。探测不到就返回 None 走词典兜底。
+
     这里刻意宽捕 Exception：Agent 导入期可能因缺模型依赖等原因失败，
     而兜底路径存在的意义正是“AI 没就绪也能出解读”，不应被它带崩。
     """
@@ -290,7 +292,7 @@ def _assert_patient_owned(db: Session, user_id: str, patient_id: str) -> Patient
     """校验就诊人属于当前账号，否则按接口文档 4003 拒绝。"""
     patient = db.get(Patient, patient_id)
     if patient is None or patient.user_id != user_id:
-        raise ApiError(ACCESS_DENIED, "无权访问该资源")
+        raise BizError(ACCESS_DENIED, "无权访问该资源")
     return patient
 
 
@@ -385,13 +387,13 @@ async def interpret(
 ) -> InterpretationResponse:
     """把病历内容解读成大白话。recordId 与 rawText 二选一。"""
     if not record_id and not raw_text:
-        raise ApiError(PARAM_INVALID, "recordId 与 rawText 必须提供其一")
+        raise BizError(PARAM_INVALID, "recordId 与 rawText 必须提供其一")
 
     record: Optional[MedicalRecord] = None
     if record_id:
         record = db.get(MedicalRecord, record_id)
         if record is None:
-            raise ApiError(PARAM_INVALID, "病历不存在或已被删除")
+            raise BizError(PARAM_INVALID, "病历不存在或已被删除")
         # 敏感数据：仅本人及同账号下被授权的家属可访问
         _assert_patient_owned(db, user_id, record.patient_id)
 
@@ -399,13 +401,23 @@ async def interpret(
     mappings = _match_terms(text)
 
     agent = _interpret_agent or _load_default_agent()
+    interpretation: Optional[str] = None
+    sources: list[str] = []
     if agent is not None:
-        interpretation, sources, agent_mappings = await _run_agent(
-            agent, record=record, text=text, session_id=session_id
-        )
-        # Agent 未给出术语对照时（如只返回二元组），沿用本地词典的识别结果
-        mappings = agent_mappings or mappings
-    else:
+        try:
+            interpretation, sources, agent_mappings = await _run_agent(
+                agent, record=record, text=text, session_id=session_id
+            )
+        except Exception:  # noqa: BLE001 - 大模型/检索链出问题也要出解读，回落到词典
+            logger.warning("病历解释 Agent 调用失败，本次改用术语词典兜底", exc_info=True)
+            interpretation = None
+        else:
+            # Agent 未给出术语对照时（如只返回二元组），沿用本地词典的识别结果
+            mappings = agent_mappings or mappings
+
+    if not (interpretation or "").strip():
+        # Agent 不可用（未配 LLM_API_KEY、检索链未就绪、AI 依赖没装）或返回了空文本。
+        # 契约上「解读」不能为空，退回本地词典：宁可话糙，也不能回一屏空白。
         dept_name, doctor_name = _visit_context(db, record)
         interpretation = _rule_based(record, text, mappings, dept_name, doctor_name)
         sources = list(RULE_BASED_SOURCES)

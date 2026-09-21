@@ -1,12 +1,15 @@
-"""预诊 / 分诊 Agent 的提示词与输出契约。
+"""各 Agent 的提示词与输出契约。
 
-对应接口文档 API-08（`POST /api/v1/ai/multimodal/messages`）：一次调用要产出
+预诊 / 分诊（API-08，`POST /api/v1/ai/multimodal/messages`）：一次调用要产出
 `reply`、`triageCard`、`riskWarning`、`sources`、`nextQuestion`、`disclaimer`。
-
 为了让流式（SSE）和非流式共用同一套提示词：
   - 自然语言回复放在最前面，流式时逐段推给前端（delta 事件）；
   - 结构化字段压成一个 `<result>` JSON 块放在最后，收流后一次性解析。
 这样正文能边生成边渲染，结构化数据不必等模型把话说完再单独调一次大模型。
+
+报告解读 / 检查注意事项 / 病历解释（API-29、API-24、API-23）各有一段系统提示词，
+它们只产出「一段话」或「几行字」，结构化字段（异常项、风险等级、建议、来源）
+仍由对应 service 按知识库与规则表产出，所以不套 `<result>` 契约。
 
 本模块只有提示词与常量，不做任何 IO，便于单独测试和迭代。
 """
@@ -15,11 +18,15 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Union
 
 if TYPE_CHECKING:
     from app.services.rag.retriever import RetrievedChunk
+
+# 召回内容的两种形态：预诊分诊走 retriever 拿到 RetrievedChunk，
+# 检查模块直连 milvus、拿到的是 dict。下面两个函数两种都认，格式才不会各写一套。
+ChunkLike = Union["RetrievedChunk", Mapping[str, Any]]
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +105,45 @@ TRIAGE_SYSTEM = f"""你是医院智能就医系统的分诊助手，负责把预
 5. sources 列出本次实际用到的知识库名称。
 
 {_OUTPUT_CONTRACT}"""
+
+# ------------------------------------------------- 报告解读 / 检查注意事项 / 病历解释
+#
+# 这三段只让模型产出正文：字段（异常项、风险等级、建议、来源）由 service 按知识库
+# 与规则表产出，模型改不动，所以不需要 PRE_DIAGNOSIS_SYSTEM 那套 <result> 契约。
+
+REPORT_ANALYSIS_SYSTEM = """你是医院智能就医系统的报告解读助手，负责把检查/检验报告讲成患者能听懂的一段话。
+
+工作要求：
+1. 只依据【知识库资料】里的条目解释各项指标的含义，资料没收录的不要臆测，
+   也不要编造参考区间、数值或病因。
+2. 你做的是通俗化复述，不是诊断：不说「您患了XX病」，而说「这项指标偏高，可能与XX有关」。
+3. 不给用药建议，不改动医生的处理意见，不推荐任何药品、剂量或保健品。
+4. 风险等级、异常项清单、健康建议由系统另行展示，你只写解读正文，不要重复罗列这些内容。
+5. 输出一段连续的中文白话，250 字以内；不要 Markdown 标题、列表符号、表格，不要表情符号。
+6. 资料未收录该项时，只客观复述结果并说明需由医生结合临床表现判读，不要脑补含义。
+7. 结尾不要写免责声明，系统会统一附上。"""
+
+EXAM_PRECAUTIONS_SYSTEM = """你是医院智能就医系统的检查助手，负责把检查前的准备事项讲清楚，让患者照着做。
+
+工作要求：
+1. 只依据【知识库资料】里的检查目的、检查流程、注意事项作答。资料没写的要求一律不要加
+   —— 自己补一条「空腹8小时」之类的准备要求，会让患者白跑一趟。
+2. 每行一条，一条只说一个动作，直接写患者要做什么或要注意什么。
+3. 不要编号、不要 Markdown 符号、不要小标题，不要重复检查目的与流程（系统会单独展示这两项）。
+4. 3~6 条；资料不足时宁少勿多，不要为凑条数编内容。
+5. 不写免责声明，系统会统一附上。"""
+
+RECORD_INTERPRET_SYSTEM = """你是医院智能就医系统的病历解读助手，负责把医生的病历写成人话，让患者看懂这次是什么问题、医生做了什么。
+
+工作要求：
+1. 解释疾病与专业术语时只依据【知识库资料】；资料没收录的，就只做病历原话的通俗复述，
+   不要补充病因、机制或预后，也不要把「可能」说成定论。
+2. 按「这次是什么问题 → 医生做了什么处理 → 回去要注意什么」的顺序讲，200 字以内，
+   白话、连贯，不要 Markdown 标题或列表符号。
+3. 严格复述病历上已有的处理意见：不得新增用药建议，不得建议加量、减量、停药或换药，
+   也不评价医生的处置是否妥当。
+4. 病历里没写的信息不要补，例如没写复诊时间就不要替患者安排复诊。
+5. 不要写免责声明，也不要写「可继续追问」之类的引导，系统会统一附上。"""
 
 
 # ------------------------------------------------- 解析模型输出
@@ -201,7 +247,13 @@ def split_reply_and_result(text: str) -> tuple[str, dict]:
 
 # ------------------------------------------------- 上下文与来源
 
-def format_context(chunks: Sequence["RetrievedChunk"]) -> str:
+def _field(chunk: ChunkLike, name: str) -> str:
+    """按字段名取一条召回内容的值；dict 与 RetrievedChunk 都认（见 ChunkLike）。"""
+    value = chunk.get(name) if isinstance(chunk, Mapping) else getattr(chunk, name, None)
+    return str(value) if value else ""
+
+
+def format_context(chunks: Sequence[ChunkLike]) -> str:
     """把召回片段拼成带编号的知识库上下文，供提示词注入。
 
     编号让模型在回复里可以指代具体条目前后印证，来源名则供它写进 sources。
@@ -211,17 +263,17 @@ def format_context(chunks: Sequence["RetrievedChunk"]) -> str:
 
     blocks: list[str] = []
     for index, chunk in enumerate(chunks, 1):
-        title = chunk.title_path or chunk.source_file or "未命名条目"
-        category = chunk.category or "知识库"
-        blocks.append(f"[{index}] 来源：{category} / {title}\n{chunk.text.strip()}")
+        title = _field(chunk, "title_path") or _field(chunk, "source_file") or "未命名条目"
+        category = _field(chunk, "category") or "知识库"
+        blocks.append(f"[{index}] 来源：{category} / {title}\n{_field(chunk, 'text').strip()}")
     return "\n\n".join(blocks)
 
 
-def collect_sources(chunks: Sequence["RetrievedChunk"]) -> list[str]:
+def collect_sources(chunks: Sequence[ChunkLike]) -> list[str]:
     """按出现顺序汇总引用到的知识库名（去重），用作接口响应里的 sources 兜底值。"""
     sources: list[str] = []
     for chunk in chunks:
-        name = chunk.category or chunk.source_file
+        name = _field(chunk, "category") or _field(chunk, "source_file")
         if name and name not in sources:
             sources.append(name)
     return sources
@@ -231,7 +283,10 @@ __all__ = [
     "BUTTON_GO_REGISTER",
     "DISCLAIMER",
     "EMERGENCY_WARNING",
+    "EXAM_PRECAUTIONS_SYSTEM",
     "PRE_DIAGNOSIS_SYSTEM",
+    "RECORD_INTERPRET_SYSTEM",
+    "REPORT_ANALYSIS_SYSTEM",
     "RESULT_CLOSE",
     "RESULT_OPEN",
     "ResultStreamSplitter",

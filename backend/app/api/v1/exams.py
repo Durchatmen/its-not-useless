@@ -3,11 +3,10 @@
 本文件只做 HTTP 适配：解析入参、取当前账号、把领域错误翻成接口文档 2.5 的
 错误码、套统一信封。业务规则全在 `services/exam_service.py`。
 
-⚠ 对接说明（core/ 目前是空文件，本模块按《环境搭建方案》§4.7 的约定引用）：
-    app.core.deps.get_current_user  —— Bearer 鉴权依赖，返回 t_user 对象（取 .user_id）
-    app.core.response.ok            —— 统一信封 code/message/data/timestamp
-    app.core.errors.BizError        —— 业务异常，由全局异常处理器输出信封
-  这三处是唯一的耦合点，core 落地时若命名不同，改上面的 import 即可。
+依赖的公共基建（app/core/）：
+    get_current_user  —— Bearer 鉴权依赖，返回 t_user 对象（取 .user_id）
+    Envelope.ok       —— 统一信封 code/message/data/timestamp
+    BizError          —— 业务异常，由 core/middleware.py 的全局异常处理器输出信封
 """
 
 from __future__ import annotations
@@ -17,9 +16,9 @@ from typing import Annotated, Any, Callable, Optional
 from fastapi import APIRouter, Body, Depends, Path, Query
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_current_user  # type: ignore[attr-defined]
-from app.core.errors import BizError  # type: ignore[attr-defined]
-from app.core.response import ok  # type: ignore[attr-defined]
+from app.core.deps import get_current_user
+from app.core.errors import BizError
+from app.core.response import Envelope
 from app.db.session import get_session
 from app.schemas.exam import ExamAnalysisRequest
 from app.services import exam_service
@@ -43,7 +42,7 @@ def _call(action: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         data = action(*args, **kwargs)
     except ExamError as exc:
         raise BizError(exc.code, exc.message) from exc
-    return ok(data)
+    return Envelope.ok(data)
 
 
 @router.get("", summary="检查列表（按日期倒序）")
