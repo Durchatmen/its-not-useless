@@ -84,15 +84,52 @@ class Settings(BaseSettings):
     # 与 CHUNK_SIZE 匹配，避免长 chunk 被静默截断
     embedding_max_length: int = 1024
 
+    # ---------- Reranker（BGE-reranker-large）----------
+    # 本地模型目录绝对路径，或 ModelScope 模型 id（如 BAAI/bge-reranker-large）
+    reranker_model: str = "BAAI/bge-reranker-large"
+    # ⚠ 与 BGEM3FlagModel 同理，FlagReranker 的 use_fp16 也默认 True，纯 CPU 必须关掉
+    reranker_use_fp16: bool = False
+    # 计算设备，"cpu" 或 "cuda:0"；留空则交给 FlagEmbedding 自动探测
+    reranker_devices: str = "cpu"
+    # query 与 passage 会拼在一起过模型，按 passage 满配给足长度
+    reranker_max_length: int = 512
+    reranker_batch_size: int = 8
+
+    # ---------- 检索（retriever）----------
+    # 向量召回候选数，随后交给 reranker 精排
+    retrieval_top_k: int = 20
+    # 最终返回条数（关闭精排时即向量召回的截断条数）
+    retrieval_rerank_top_k: int = 5
+    # 关掉则跳过精排，直接按向量相似度返回，省一次模型加载
+    retrieval_enable_rerank: bool = True
+    # 混合检索：向量召回之外再叠一层 BM25 关键词召回，两路 RRF 融合后送精排
+    retrieval_enable_hybrid: bool = True
+
     # ---------- 切分 ----------
     chunk_size: int = 800
     chunk_overlap: int = 120
 
+    # ---------- 大模型（Qwen / OpenAI 兼容端点）----------
+    # 阿里云百炼的 OpenAI 兼容端点；换自建 vLLM 时改成对应地址即可，调用方代码不动
+    llm_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    # 百炼控制台申请；留空时调用会立刻报错提示，不会发出无鉴权的请求
+    llm_api_key: str = ""
+    # 百炼模型 id，如 qwen-plus / qwen-max / qwen-turbo
+    llm_model: str = "qwen-plus"
+    # 单次请求超时（秒）；流式下是相邻两段数据之间的最长等待，不是总时长
+    llm_timeout: float = 60.0
+    llm_max_tokens: int = 1024
+    llm_temperature: float = 0.7
+
+    # ---------- 多模态（图片 / 语音走同一个兼容端点，只是换模型）----------
+    # 图片理解 / OCR 用的视觉模型；2026 年起可换成 qwen3-vl-plus 或 qwen-vl-max
+    llm_vl_model: str = "qwen-vl-plus"
+    # 语音转写用的全模态模型；不支持 audioFormat=amr（需先转码成 wav/mp3）
+    llm_omni_model: str = "qwen-omni-turbo"
+
     # ---------- 其他（本模块暂未使用，保留以对齐 .env）----------
     amap_web_key: str = ""
     llm_provider: str = ""
-    llm_api_key: str = ""
-    llm_model: str = "qwen"
     his_base_url: str = ""
     his_enabled: bool = False
 
