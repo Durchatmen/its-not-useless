@@ -73,11 +73,14 @@ class LoginData(BaseModel):
 
 
 class RegisterRequest(BaseModel):
-    """API-02 用户注册请求体。"""
+    """API-02 用户注册请求体。
+
+    注册不校验短信验证码（产品要求去掉注册环节的验证码校验），只做实名核验。
+    验证码能力仍保留给登录场景（SmsLoginRequest）。
+    """
 
     phone: str = Field(pattern=PHONE_PATTERN.pattern, description="11 位手机号，作为登录账号")
     password: str = _PASSWORD_FIELD
-    smsCode: str = Field(pattern=SMS_CODE_PATTERN, description="6 位短信验证码")
     name: str = Field(min_length=1, max_length=32, description="姓名，须与身份证一致")
     idcard: str = Field(pattern=IDCARD_PATTERN.pattern, description="18 位身份证号")
 
@@ -101,7 +104,7 @@ class SmsCodeRequest(BaseModel):
 
     phone: str = Field(pattern=PHONE_PATTERN.pattern, description="11 位手机号")
     # 接口文档 API-03 把 scene 标为必填，因此不给默认值
-    scene: SmsScene = Field(description="用途：REGISTER 注册 / LOGIN 登录")
+    scene: SmsScene = Field(description="用途：LOGIN 登录（注册已不需要验证码）")
 
 
 class SmsLoginRequest(BaseModel):

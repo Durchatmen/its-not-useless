@@ -11,7 +11,7 @@ from app.db.base import Base, CreatedAtMixin
 
 
 class SmsCode(Base, CreatedAtMixin):
-    """注册环节短信验证码的发送与校验（5分钟有效、60秒限发）。"""
+    """登录环节短信验证码的发送与校验（5分钟有效、60秒限发）。"""
 
     __tablename__ = "t_sms_code"
     __table_args__ = (Index("idx_sms_phone_scene", "phone", "scene", "created_at"),)
@@ -22,9 +22,9 @@ class SmsCode(Base, CreatedAtMixin):
     scene: Mapped[str] = mapped_column(
         String(16),
         nullable=False,
-        default="REGISTER",
-        server_default="REGISTER",
-        comment="用途：REGISTER注册等",
+        default="LOGIN",
+        server_default="LOGIN",
+        comment="用途：LOGIN登录等",
     )
     expired_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, comment="过期时间（发送后5分钟）"

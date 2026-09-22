@@ -81,7 +81,7 @@ def login_by_sms(payload: SmsLoginRequest, session: SessionDep, request: Request
 def register(payload: RegisterRequest, session: SessionDep) -> Any:
     """注册账号（角色固定 PATIENT）。
 
-    两步校验：短信验证码（1003）+ 实名认证（1004）。手机号已注册返回 1002。
+    仅校验实名认证（1004）；注册环节不校验短信验证码。手机号已注册返回 1002。
     身份证号以 AES-SIV 确定性加密落库，既满足密文存储，又支持按证件号等值登录。
     """
     user = auth_service.register(session, payload)
@@ -92,12 +92,12 @@ def register(payload: RegisterRequest, session: SessionDep) -> Any:
 
 @router.post("/sms-code", summary="API-03 发送短信验证码")
 def send_sms_code(payload: SmsCodeRequest, session: SessionDep) -> Any:
-    """发送 6 位短信验证码。
+    """发送 6 位短信验证码，供手机号 + 验证码登录使用（scene=LOGIN）。
 
-    scene=REGISTER 时会先确认账号未被占用（已注册返回 1002）；
+    注册环节已不需要验证码，REGISTER 不再是合法 scene（会返回 4001）。
     同号同场景 60 秒内不允许重复发送。接口文档 3.1.3 规定本接口无业务数据。
     """
-    auth_service.send_register_code(session, payload)
+    auth_service.send_code(session, payload)
     return Envelope.ok(None)
 
 

@@ -1,7 +1,7 @@
 """登录 / 注册业务（《接口文档》3.1 API-01 / API-02 / API-03）。
 
 * 账号：注册时以手机号作为登录账号，登录时账号支持手机号或身份证号；
-* 注册两步校验：短信验证码（app.services.sms）+ 实名认证（详见 _verify_realname）；
+* 注册只做实名认证（详见 _verify_realname），不校验短信验证码；验证码仅用于登录场景；
 * 密码：bcrypt 加盐哈希存储，明文只在请求生命周期内出现，不落库、不写日志；
 * 身份证号：AES-SIV 确定性加密存储（app/core/crypto），既能密文落库，又能按
   “身份证号 = ?”等值登录；
@@ -43,10 +43,12 @@ _REGISTER_RETRIES = 3
 # --------------------------------------------------------------------------- #
 
 
-def send_register_code(db: Session, payload: SmsCodeRequest) -> SmsCode:
-    """注册页发送验证码：先确认账号未被占用，再走 60 秒限发。"""
-    if payload.scene is SmsScene.REGISTER:
-        _assert_account_available(db, payload.phone)
+def send_code(db: Session, payload: SmsCodeRequest) -> SmsCode:
+    """发送短信验证码（登录场景），走 60 秒限发。
+
+    注册已不需要验证码，原 REGISTER 场景的「账号未被占用」前置校验一并移除
+    —— 账号是否存在由后续登录/注册各自的校验负责。
+    """
     row = sms.issue_code(db, payload.phone, payload.scene)
     db.commit()
     return row
@@ -58,11 +60,13 @@ def send_register_code(db: Session, payload: SmsCodeRequest) -> SmsCode:
 
 
 def register(db: Session, payload: RegisterRequest) -> User:
-    """注册账号（角色固定 PATIENT），返回新建用户。"""
+    """注册账号（角色固定 PATIENT），返回新建用户。
+
+    只校验账号未被占用 + 实名核验；短信验证码已按产品要求从注册流程移除
+    （不再需要 API-03 的 REGISTER 场景验证码）。
+    """
     account = payload.phone.strip()
     _assert_account_available(db, account)
-
-    sms.verify_code(db, account, payload.smsCode, SmsScene.REGISTER)
 
     if not _verify_realname(payload.name, payload.idcard):
         raise BizError(ErrorCode.REAL_NAME_FAILED)

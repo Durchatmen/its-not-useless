@@ -1,5 +1,13 @@
 import request from './request'
 
+/**
+ * 检查列表（后端 summary：检查列表（按日期倒序））。
+ * 接口文档 3.8.3 的「查询检查状态」是单条查询，列表走本接口。
+ */
+export function listExams({ patientId, examStatus, pageNum = 1, pageSize = 10 } = {}) {
+  return request.get('/exams', { params: { patientId, examStatus, pageNum, pageSize } })
+}
+
 /** API-24 检查注意事项 */
 export function getExamPrecautions(examId) {
   return request.get(`/exams/${examId}/precautions`)

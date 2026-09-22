@@ -70,8 +70,11 @@ class AiInputType(StrEnum):
 
 
 class SmsScene(StrEnum):
-    """短信验证码用途（接口文档 3.1.3 scene 参数，演示数据含 RESET_PWD）。"""
+    """短信验证码用途（接口文档 3.1.3 scene 参数，演示数据含 RESET_PWD）。
 
-    REGISTER = "REGISTER"
+    注册环节已移除验证码校验，因此不再有 REGISTER 场景；REGISTER 传进来会按
+    参数校验失败返回 4001。
+    """
+
     LOGIN = "LOGIN"
     RESET_PWD = "RESET_PWD"

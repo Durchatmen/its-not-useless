@@ -1,9 +1,12 @@
 import request from './request'
 
-/** API-22 查询电子病历 */
-export function listMedicalRecords({ patientId, pageNum = 1, pageSize = 10 } = {}) {
+/**
+ * API-22 查询电子病历。
+ * startDate / endDate 为就诊日期区间（yyyy-MM-dd），后端按别名接收，可不传。
+ */
+export function listMedicalRecords({ patientId, startDate, endDate, pageNum = 1, pageSize = 10 } = {}) {
   return request.get('/medical-records', {
-    params: { patientId, pageNum, pageSize },
+    params: { patientId, startDate, endDate, pageNum, pageSize },
   })
 }
 

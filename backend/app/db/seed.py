@@ -1368,7 +1368,8 @@ def _build_reminders(
 # 短信验证码与操作日志
 # --------------------------------------------------------------------------- #
 
-SMS_SCENES = ["REGISTER", "LOGIN", "RESET_PWD"]
+# 注册已不需要验证码，演示数据只造登录/重置两类场景的码
+SMS_SCENES = ["LOGIN", "RESET_PWD"]
 
 LOG_ACTIONS = [
     ("LOGIN", "账号登录成功"),

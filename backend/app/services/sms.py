@@ -25,10 +25,12 @@ from app.utils.time_utils import now
 logger = logging.getLogger(__name__)
 
 
-def issue_code(
-    db: Session, phone: str, scene: SmsScene | str = SmsScene.REGISTER
-) -> SmsCode:
-    """生成、下发并落库一条验证码，返回记录（开发模式可直接读 .code 联调）。"""
+def issue_code(db: Session, phone: str, scene: SmsScene | str) -> SmsCode:
+    """生成、下发并落库一条验证码，返回记录（开发模式可直接读 .code 联调）。
+
+    scene 不给默认值：取值直接决定这条码能被哪个流程消费，猜错会生成一条
+    永远校验不过的死码，因此由调用方显式传入。
+    """
     scene_value = _value_of(scene)
     _assert_resend_interval(db, phone, scene_value)
 
@@ -51,9 +53,7 @@ def issue_code(
     return row
 
 
-def verify_code(
-    db: Session, phone: str, code: str, scene: SmsScene | str = SmsScene.REGISTER
-) -> None:
+def verify_code(db: Session, phone: str, code: str, scene: SmsScene | str) -> None:
     """校验验证码；未发送、已使用、已过期、不匹配统一抛 1003。"""
     scene_value = _value_of(scene)
     row = db.execute(
